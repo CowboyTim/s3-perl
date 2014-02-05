@@ -10,7 +10,7 @@ use File::Basename qw(dirname);
 
 use MIME::Base64 qw(encode_base64);
 use Digest::HMAC_SHA1 qw(hmac_sha1);
-use Getopt::Long;
+use Getopt::Long qw(:config no_ignore_case bundling);
 use XML::Simple;
 use AnyEvent::HTTP;
 use AnyEvent::TLS;
@@ -27,22 +27,24 @@ if(open(my $fh, "<".glob("~/.passwd-s3fs"))){
 
 GetOptions(
     my $opts = {
-        key    => $key,
-        id     => $id,
-        method => 'list',
-        url    => "s3.amazonaws.com",
+        key     => $key,
+        id      => $id,
+        method  => 'list',
+        url     => "s3.amazonaws.com",
+        verbose => 0,
     },
     "bucket|b=s",
     "method|m=s",
     "key|k=s",
     "acl|a=s",
     "url|u=s",
+    "verbose|v+",
     "l!"
 ) or pod2usage(1);
 pod2usage(-message => "Please specify --bucket <bucketname>\n",
           -exitval => 2) unless defined $opts->{bucket};
 
-AnyEvent::Log::ctx->level("debug");
+$AnyEvent::Log::FILTER->level($opts->{verbose}==1?'info':$opts->{verbose}==2?'debug':'note');
 
 my $headers = {
     (defined $opts->{'acl'}         ?('x-amz-acl'    => $opts->{'acl'})         :()),
@@ -148,18 +150,18 @@ sub w_do {
     http_request(
         uc($what) => "https://$opts->{bucket}.$opts->{url}/$url",
         headers   => {%{$headers}, "User-Agent" => 's3.pl'},
-        tls_ctx   => AnyEvent::TLS->new(verify => 0),
+        tls_ctx   => AnyEvent::TLS->new(verify => 1, verify_peername => 'https'),
         timeout   => 30,
         (defined $body?(body => $body):()),
         sub {
             (my $body, $result) = @_;
-            print STDERR Dumper($result);
+            AE::log(debug => sub {Dumper($result)});
             $result->{content} = $body;
             $cv->send();
         }
     );
     $cv->recv();
-    AE::log(debug => Dumper($result));
+    AE::log(debug => sub{Dumper($result)});
     return $result->{content};
 }
 
