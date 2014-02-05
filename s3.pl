@@ -58,20 +58,23 @@ my $headers = {
     *{mv} = \&replace;
 }
 
-{
+if(grep {$_ eq $opts->{method}} qw(ls dir list rm del delete mv replace put cat)){
     no strict 'refs';
     &{$opts->{method}}($ARGV[0]);
+} else {
+    pod2usage(-message => "Please specify a valid method with -m <method>\n",
+              -exitval => 2);
 }
 
 sub sign {
-    my ($h, $method, $resource, $headers, $md5, $contenttype) = @_;
+    my ($h, $method, $resource, $all_headers, $md5, $contenttype) = @_;
     $resource = "/$opts->{bucket}/".($resource//'');
     $method = uc($method);
     $md5 //= '';
     $contenttype //= '';
     my $headerstr = '';
-    if (keys %{$headers}){
-        $headerstr = join("\n", map {"$_:$headers->{$_}"} sort keys %{$headers})."\n";
+    if (keys %{$all_headers}){
+        $headerstr = join("\n", map {"$_:$all_headers->{$_}"} sort keys %{$all_headers})."\n";
     }
     my $date = strftime('%a, %d %b %Y %H:%M:%S +0000', gmtime());
     my $str = "$method\n$md5\n$contenttype\n$date\n$headerstr$resource";
@@ -144,12 +147,12 @@ sub list {
 }
 
 sub w_do {
-    my ($what, $url, $headers, $body) = @_;
+    my ($what, $url, $all_headers, $body) = @_;
     my $result;
     my $cv = AE::cv();
     http_request(
         uc($what) => "https://$opts->{bucket}.$opts->{url}/$url",
-        headers   => {%{$headers}, "User-Agent" => 's3.pl'},
+        headers   => {%{$all_headers}, "User-Agent" => 's3.pl'},
         tls_ctx   => AnyEvent::TLS->new(verify => 1, verify_peername => 'https'),
         timeout   => 30,
         (defined $body?(body => $body):()),
