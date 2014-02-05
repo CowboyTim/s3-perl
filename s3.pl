@@ -39,6 +39,8 @@ GetOptions(
     "url|u=s",
     "l!"
 ) or pod2usage(1);
+pod2usage(-message => "Please specify --bucket <bucketname>\n",
+          -exitval => 2) unless defined $opts->{bucket};
 push @ARGV, '' unless @ARGV;
 
 AnyEvent::Log::ctx->level("debug");
