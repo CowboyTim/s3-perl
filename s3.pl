@@ -41,10 +41,8 @@ GetOptions(
 ) or pod2usage(1);
 pod2usage(-message => "Please specify --bucket <bucketname>\n",
           -exitval => 2) unless defined $opts->{bucket};
-push @ARGV, '' unless @ARGV;
 
 AnyEvent::Log::ctx->level("debug");
-
 
 my $headers = {
     (defined $opts->{'acl'}         ?('x-amz-acl'    => $opts->{'acl'})         :()),
@@ -65,7 +63,7 @@ my $headers = {
 
 sub sign {
     my ($h, $method, $resource, $headers, $md5, $contenttype) = @_;
-    $resource = "/$opts->{bucket}/$resource";
+    $resource = "/$opts->{bucket}/".($resource//'');
     $method = uc($method);
     $md5 //= '';
     $contenttype //= '';
@@ -81,13 +79,14 @@ sub sign {
 
 sub put {
     my ($file) = @_;
+    my $from = $ARGV[1] // '&STDIN';
+    die "Need a correct arguments for put <remote filename> [<local filename>]\n"
+        unless defined $file;
     sign($headers, 'put', $file);
-    my $from = $ARGV[1];
-    die "Need a second argument\n" unless defined $from and -e $from;
     my $body = do {
         local $/;
         my $fh;
-        open($fh, '<', $from) or die "Error opening file $from: $!\n";
+        open($fh, "<$from") or die "Error opening file $from: $!\n";
         <$fh>
     };
     return w_do('put', $file, $headers, $body);
@@ -129,7 +128,7 @@ sub list {
     my $parser = XML::Simple->new(ForceArray => [qw(Contents CommonPrefixes Prefix)]);
     $result = $parser->XMLin($result);
     my $long = '';
-    for my $ent (grep {$file eq $_->{Key} or !$file} @{$result->{Contents}//[]}){
+    for my $ent (grep {($file//'') eq $_->{Key} or !$file} @{$result->{Contents}//[]}){
         if ($opts->{l}){
             $long = sprintf('%s %10d  %s ',
                 $ent->{Owner}{DisplayName}, 
