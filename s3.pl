@@ -36,13 +36,17 @@ GetOptions(
     "bucket|b=s",
     "method|m=s",
     "key|k=s",
+    "id=s",
     "acl|a=s",
     "url|u=s",
+    "insecure!",
     "verbose|v+",
     "l!"
 ) or pod2usage(1);
 pod2usage(-message => "Please specify --bucket <bucketname>\n",
           -exitval => 2) unless defined $opts->{bucket};
+pod2usage(-message => "Please specify --key <key> --id <id>\n",
+          -exitval => 2) unless defined $opts->{key} and defined $opts->{id};
 
 $AnyEvent::Log::FILTER->level($opts->{verbose}==1?'info':$opts->{verbose}==2?'debug':'note');
 
@@ -153,7 +157,7 @@ sub w_do {
     http_request(
         uc($what) => "https://$opts->{bucket}.$opts->{url}/$url",
         headers   => {%{$all_headers}, "User-Agent" => 's3.pl'},
-        tls_ctx   => AnyEvent::TLS->new(verify => 1, verify_peername => 'https'),
+        tls_ctx   => AnyEvent::TLS->new(verify => !$opts->{insecure}, verify_peername => 'https'),
         timeout   => 30,
         (defined $body?(body => $body):()),
         sub {
