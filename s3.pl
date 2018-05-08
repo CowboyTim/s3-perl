@@ -9,7 +9,7 @@ use Time::Local qw(timegm);
 use File::Basename qw(dirname);
 
 use MIME::Base64 qw(encode_base64);
-use Digest::HMAC_SHA1 qw(hmac_sha1);
+use Digest::SHA qw(hmac_sha1 hmac_sha256 hmac_sha256_hex);
 use Getopt::Long qw(:config no_ignore_case bundling);
 use XML::Simple;
 use AnyEvent::HTTP;
@@ -30,6 +30,7 @@ GetOptions(
         key     => $key,
         id      => $id,
         method  => 'list',
+        region  => 'us-east-1',
         url     => "s3.amazonaws.com",
         verbose => 0,
     },
@@ -40,6 +41,8 @@ GetOptions(
     "acl|a=s",
     "url|u=s",
     "insecure!",
+    "signv4!",
+    "region=s",
     "verbose|v+",
     "l!"
 ) or pod2usage(1);
@@ -72,18 +75,38 @@ if(grep {$_ eq $opts->{method}} qw(ls dir list rm del delete mv replace put cat)
 
 sub sign {
     my ($h, $method, $resource, $all_headers, $md5, $contenttype) = @_;
+    my @gmt_now = gmtime();
     $resource = "/$opts->{bucket}/".($resource//'');
     $method = uc($method);
     $md5 //= '';
     $contenttype //= '';
     my $headerstr = '';
-    if (keys %{$all_headers}){
-        $headerstr = join("\n", map {"$_:$all_headers->{$_}"} sort keys %{$all_headers})."\n";
+    my $date = strftime('%a, %d %b %Y %H:%M:%S +0000', @gmt_now);
+    if($opts->{signv4}){
+        my $isodate = strftime('%Y%m%dT%H%M%SZ', @gmt_now);
+        my $dt   = strftime('%Y%m%d', @gmt_now);
+        my $dk   = hmac_sha256("AWS4$opts->{key}$dt");
+        my $drk  = hmac_sha256($dk  , $opts->{region});
+        my $drsk = hmac_sha256($drk , 's3');
+        my $sk   = hmac_sha256($drsk, 'aws4_request');
+
+        $h->{'x-amz-date'}  = $isodate;
+        my $sh  = join(';', map {lc $_} sort 'x-amz-date', keys %{$all_headers//{}});
+
+        my $str = "$method\n$md5\n$contenttype\n$date\n$headerstr$resource";
+        my $signature = hmac_sha256_hex($sk, $str);
+        $h->{Authorization} = "AWS4-HMAC-SHA256\nCredential=$opts->{id}/$dt/$opts->{region}/s3/aws4_request,\nSignedHeaders=$sh,\nSignature=$signature";
+
+        return
     }
-    my $date = strftime('%a, %d %b %Y %H:%M:%S +0000', gmtime());
+    $all_headers->{'x-amz-security-token'} = $ENV{AWS_SESSION_TOKEN} if $ENV{AWS_SESSION_TOKEN};
+    if (keys %{$all_headers}){
+        $headerstr = join("\n", map {lc($_).":$all_headers->{$_}"} sort keys %{$all_headers})."\n";
+    }
     my $str = "$method\n$md5\n$contenttype\n$date\n$headerstr$resource";
     $h->{Authorization} = "AWS $opts->{id}:".encode_base64(hmac_sha1($str, $opts->{key}), '');
     $h->{Date}          = $date;
+    return;
 }
 
 sub put {
@@ -104,6 +127,7 @@ sub put {
 sub cat {
     my ($file) = @_;
     print get($file);
+    return;
 }
 
 sub get {
@@ -116,6 +140,7 @@ sub delete {
     my ($file) = @_;
     sign($headers, 'delete', $file);
     w_do('delete', $file, $headers);
+    return;
 }
 
 sub replace {
@@ -129,11 +154,13 @@ sub replace {
     };
     sign($headers, 'put', $to, $copy_h);
     w_do('put', $to, {%{$headers}, %{$copy_h}});
+    return;
 }
 
 sub list {
     my ($file) = @_; 
     my $result = get('');
+    return unless defined $result;
     my $parser = XML::Simple->new(ForceArray => [qw(Contents CommonPrefixes Prefix)]);
     $result = $parser->XMLin($result);
     my $long = '';
@@ -169,6 +196,10 @@ sub w_do {
     );
     $cv->recv();
     AE::log(debug => sub{Dumper($result)});
+    if($result->{Status} !~ m/^(200)$/){
+        AE::log(error => sub{$result->{Reason}.($result->{content}?"\n$result->{content}\n":'')});
+        return;
+    }
     return $result->{content};
 }
 
